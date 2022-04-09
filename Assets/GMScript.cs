@@ -11,16 +11,28 @@ using Random = UnityEngine.Random;
 [SuppressMessage("ReSharper", "InconsistentNaming")]
 public class GMScript : MonoBehaviour
 {
+
+    private int _gamesWon;
+    private int _gamesPlayed;
+
+    private bool _gameOn;
+    private int _direction;
+    private int _directionTicks;
+    private bool _wonLastGame;
     public TileBase pieceTile;
     public TileBase emptyTile;
     public TileBase chunkTile;
     //public TileBase[] numberTiles;
     public Tilemap boardMap;
     public TMP_Text infoText;
+    public TMP_Text gameOverText;
+    public TMP_Text startGameText;
     private int _score;
     private int _difficulty;
-    private int _fixedUpdateFramesToWait = 10;
+    private int _fixedUpdateFramesToWait;
     private int _fixedUpdateCount;
+
+    private int _parScore = 1;
 
     // ReSharper disable once InconsistentNaming
     public bool DEBUG_MODE;
@@ -85,9 +97,66 @@ public class GMScript : MonoBehaviour
             _myPiece[i].x = targetPiece[i].x + midX;
             _myPiece[i].y = targetPiece[i].y + maxY;
         }
+        _dirty = true;
         return ValidPiece();
     }
+
+    int getStartingSpeed() {
+        int handicap = 0;
+        if((_gamesPlayed / 2) > _gamesWon) {
+            handicap = (_gamesPlayed/2) - _gamesWon;
+        }
+        return 10 + handicap;
+    }
     
+    void StartGame() {
+        BlankBaseBoard();
+        _gameOn = true;
+        _myPiece = null;
+        _myChunk = null;
+        _fixedUpdateCount = 1;
+        _fixedUpdateFramesToWait = getStartingSpeed();
+        if(_gamesPlayed > 0) {
+            UpdateParScore(_wonLastGame);
+        }
+        _score = 0;
+        _gamesPlayed++;
+        
+    }
+
+    void EndGame() {
+        _gameOn = false;
+        _wonLastGame = _score >= _parScore;
+        if(_wonLastGame) {
+            _gamesWon++;
+        }
+    }
+
+    void UpdateParScore(bool didWin)
+    {
+        if(didWin) {
+            _parScore++;
+        }
+    }
+
+    void UpdateText()
+    {
+        if(_gamesPlayed > 0) {
+            startGameText.text = "";
+        }
+        if(_gamesPlayed > 0 && !_gameOn) {
+            gameOverText.text = "Game\nOver";
+        } else {
+            gameOverText.text = "";
+        }
+        infoText.text = 
+            $"GAME:{_gamesPlayed} \n\n" +
+            $"PAR:{_parScore} \n\n" + 
+            $"PTS:{_score} \n\n" + 
+            $"MAX:{_difficulty} \n\n" +
+            $"CURRIC\n576";
+    }
+
     void BlankBaseBoard()
     {
         for (int j = _minBy; j <= _maxBy; j++)
@@ -95,7 +164,7 @@ public class GMScript : MonoBehaviour
         {
             boardMap.SetTile(new Vector3Int(i,j,0),emptyTile);
         }
-        MakeNewPiece(0,_maxBy);
+        _dirty = true;
     }
 
     void SetupBaseBoard()
@@ -114,8 +183,6 @@ public class GMScript : MonoBehaviour
                 if (wy > _maxBy) _maxBy = wy;
             }
         }
-
-        BlankBaseBoard();
         Debug.Log($"BOARD SIZE = {(1 + _maxBx - _minBx)} x {(1 + _maxBy - _minBy)}");
     }
 
@@ -251,12 +318,22 @@ public class GMScript : MonoBehaviour
     
     void DoTetrisLeft()
     {
-        ShiftPiece(-1,0);
+        if(_direction != -1) {
+            _directionTicks = 3;
+        }
+        _direction = -1;
     }
 
     void DoTetrisRight()
     {
-        ShiftPiece(1,0);
+        if(_direction != 1) {
+            _directionTicks = 3;
+        }
+        _direction = 1;
+    }
+
+    void ResetDirection() {
+        _direction = 0;
     }
     
     void DoTetrisUp()
@@ -308,62 +385,100 @@ public class GMScript : MonoBehaviour
     }
     
     void FixedUpdate()
-    {
-        if (0 != _fixedUpdateCount++ % _fixedUpdateFramesToWait) return;
-        DoTetrisDown();
-        if (_inARow > _difficulty)
-        {
-            _difficulty = _inARow;
-            if (_fixedUpdateFramesToWait > 1)
-            {
-                _fixedUpdateFramesToWait--;
+    {   
+        UpdateText();
+
+        if (_gameOn) {
+
+            if(_direction != 0 && 0 == _directionTicks--) {
+                ShiftPiece(_direction, 0);
+                _directionTicks = 1;
+            }
+            //Tetris Game Tick
+            if (0 == _fixedUpdateCount++ % _fixedUpdateFramesToWait) {
+                DoTetrisDown();
+                if (_inARow > _difficulty)
+                {
+                    _difficulty = _inARow;
+                    if (_fixedUpdateFramesToWait > 1)
+                    {
+                        _fixedUpdateFramesToWait--;
+                    }
+                }
+
+                if (CheckKillChunk())
+                {
+                    _inARow++;
+                    MakeRandomAngryChunk();
+                }
+                else _inARow = 0;
+                _fixedUpdateCount = 1;
             }
         }
-
-        if (CheckKillChunk())
-        {
-            _inARow++;
-            MakeRandomAngryChunk();
-        }
-        else _inARow = 0;
-        infoText.text = $"PTS:{_score}\n\nMAX:{_difficulty}\n\nCURRIC\n576";
-        _fixedUpdateCount = 1;
     }
     
     void Update()
     {
         if (null == Camera.main) return; 
         if (!_initialized) SetupBaseBoard();
-        if (null == _myPiece)
-        {
-            if (!MakeNewPiece(0,_maxBy))
-            {   
-                Debug.Log("NO VALID MOVE");
-                Debug.Break();
+        
+        // Check if game over
+        if (_gameOn) {
+            if (Input.GetKeyDown(KeyCode.Q)) { 
+                EndGame();
+            }
+            if (null == _myPiece) {
+                if (_gameOn && !MakeNewPiece(0,_maxBy)) {   
+                    if(DEBUG_MODE) Debug.Log("NO VALID MOVE");
+                    EndGame();
+                }
             }
         }
-        
-        
-        if (Input.GetKeyDown(KeyCode.Q)) { Debug.Break(); }
-        else if (Input.GetMouseButtonDown(0)) 
-        {
-            var point = Camera.main.ScreenToWorldPoint(Input.mousePosition); 
-            Vector3Int selectedTile = boardMap.WorldToCell(point);
-            AddChunkAtPoint(selectedTile);
-            // Debug.Log(selectedTile);
-            // boardMap.SetTile(selectedTile, pieceTile); 
+
+        // Check User Input For Tetris Game
+        if (_gameOn) {
+            if (DEBUG_MODE) {
+                if (Input.GetMouseButtonDown(0)) {
+                    var point = Camera.main.ScreenToWorldPoint(Input.mousePosition); 
+                    Vector3Int selectedTile = boardMap.WorldToCell(point);
+                    AddChunkAtPoint(selectedTile);
+                    // Debug.Log(selectedTile);
+                    // boardMap.SetTile(selectedTile, pieceTile);
+                }
+            }
+            // Horizontal Directions
+            if (Input.GetKey(KeyCode.LeftArrow)) {
+                // Instant Feedback
+                if(Input.GetKeyDown(KeyCode.LeftArrow)) {
+                    ShiftPiece(-1, 0);
+                }
+                DoTetrisLeft();
+            }
+            else if (Input.GetKey(KeyCode.RightArrow)) {
+                // Instant Feedback
+                if(Input.GetKeyDown(KeyCode.RightArrow)) {
+                    ShiftPiece(1, 0);
+                }
+                DoTetrisRight();
+            }
+            else {
+                ResetDirection();
+            }
+
+            if (Input.GetKeyDown(KeyCode.UpArrow)) { DoTetrisUp(); }
+            if (Input.GetKeyDown(KeyCode.DownArrow)) { DoTetrisDrop(); }
         }
-        else if (Input.GetKeyDown(KeyCode.LeftArrow)) { DoTetrisLeft(); }
-        else if (Input.GetKeyDown(KeyCode.RightArrow)) { DoTetrisRight(); }
-        else if (Input.GetKeyDown(KeyCode.UpArrow)) { DoTetrisUp(); }
-        else if (Input.GetKeyDown(KeyCode.DownArrow)) { DoTetrisDrop(); }
+        else {
+            if (Input.GetKeyDown(KeyCode.N)) {
+                StartGame();
+            }
+        }
 
         if (_dirty)
         {
             DrawBoard();
             DrawPiece();
         }
-    } 
-    
-   
+    }
+
 }
